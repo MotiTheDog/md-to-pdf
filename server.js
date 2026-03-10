@@ -1,6 +1,6 @@
 const express = require('express');
 const marked = require('marked');
-const puppeteer = require('puppeteer');
+const PDFDocument = require('pdfkit');
 const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
@@ -19,109 +19,140 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// CSS template for HTML
-const htmlTemplate = (content, title = 'Document') => `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>${title}</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 40px 20px;
-      color: #333;
-    }
-    h1, h2, h3, h4, h5, h6 {
-      margin-top: 1.5em;
-      margin-bottom: 0.5em;
-      color: #2c3e50;
-    }
-    h1 { font-size: 2em; border-bottom: 2px solid #eee; padding-bottom: 0.3em; }
-    h2 { font-size: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-    h3 { font-size: 1.25em; }
-    p { margin-bottom: 1em; }
-    ul, ol { padding-left: 2em; margin-bottom: 1em; }
-    li { margin-bottom: 0.25em; }
-    code {
-      background: #f4f4f4;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.9em;
-    }
-    pre {
-      background: #f4f4f4;
-      padding: 1em;
-      border-radius: 5px;
-      overflow-x: auto;
-      margin-bottom: 1em;
-    }
-    pre code {
-      background: none;
-      padding: 0;
-    }
-    blockquote {
-      border-left: 4px solid #ddd;
-      padding-left: 1em;
-      margin: 1em 0;
-      color: #666;
-    }
-    a { color: #3498db; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 1em;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 8px 12px;
-      text-align: left;
-    }
-    th { background: #f8f8f8; }
-    img { max-width: 100%; height: auto; }
-    hr { border: none; border-top: 2px solid #eee; margin: 2em 0; }
-  </style>
-</head>
-<body>
-  ${content}
-</body>
-</html>
-`;
-
-// Convert Markdown to PDF
+// Convert HTML-like content to PDF using PDFKit
 async function convertToPDF(markdown, title = 'Document') {
-  const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  const page = await browser.newPage();
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        margins: { top: 50, bottom: 50, left: 50, right: 50 },
+        autoFirstPage: false
+      });
 
-  const html = markdown ? marked.parse(markdown) : '';
-  const fullHtml = htmlTemplate(html, title);
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
 
-  await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-  const pdf = await page.pdf({
-    format: 'A4',
-    printBackground: true,
-    margin: {
-      top: '20px',
-      right: '20px',
-      bottom: '20px',
-      left: '20px'
+      // Add first page
+      doc.addPage();
+
+      // Parse markdown to HTML
+      const html = markdown ? marked.parse(markdown) : '';
+      
+      // Simple HTML to PDFKit conversion
+      let yPos = 50;
+      const margin = 50;
+      const pageWidth = 595.28; // A4 width
+      const pageHeight = 841.89; // A4 height
+      const maxWidth = pageWidth - (margin * 2);
+
+      // Add title
+      doc.fontSize(24).fillColor('#2c3e50');
+      const titleWidth = doc.widthOfString(title);
+      doc.text(title, margin, yPos, { width: maxWidth, align: 'center' });
+      yPos += 40;
+
+      // Draw line under title
+      doc.strokeColor('#ddd').lineWidth(1);
+      doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
+      yPos += 20;
+
+      // Reset for content
+      doc.fontSize(11).fillColor('#333');
+
+      // Simple parser for common markdown elements
+      const lines = html.split('\n');
+      let inList = false;
+      let listLevel = 0;
+
+      for (let line of lines) {
+        // Check if we need a new page
+        if (yPos > pageHeight - 50) {
+          doc.addPage();
+          yPos = 50;
+        }
+
+        // Headers
+        if (line.match(/<h1>/i)) {
+          const text = line.replace(/<\/?h1>/gi, '').replace(/<[^>]*>/g, '');
+          doc.fontSize(20).fillColor('#2c3e50');
+          doc.text(text, margin, yPos, { width: maxWidth });
+          yPos += 30;
+          doc.strokeColor('#eee').lineWidth(2).moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
+          yPos += 15;
+          doc.fontSize(11).fillColor('#333');
+        } else if (line.match(/<h2>/i)) {
+          const text = line.replace(/<\/?h2>/gi, '').replace(/<[^>]*>/g, '');
+          doc.fontSize(16).fillColor('#2c3e50');
+          doc.text(text, margin, yPos, { width: maxWidth });
+          yPos += 20;
+          doc.strokeColor('#eee').lineWidth(1).moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
+          yPos += 15;
+          doc.fontSize(11).fillColor('#333');
+        } else if (line.match(/<h3>/i)) {
+          const text = line.replace(/<\/?h3>/gi, '').replace(/<[^>]*>/g, '');
+          doc.fontSize(14).fillColor('#2c3e50');
+          doc.text(text, margin, yPos, { width: maxWidth });
+          yPos += 15;
+          doc.fontSize(11).fillColor('#333');
+        }
+        // Code blocks
+        else if (line.match(/<pre>/i) || line.match(/<code>/i)) {
+          const text = line.replace(/<\/?(pre|code)>/gi, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          doc.fillColor('#f4f4f4').rect(margin, yPos - 5, maxWidth, doc.heightOfString(text, { width: maxWidth }) + 15).fill();
+          doc.fillColor('#333').text(text, margin + 5, yPos + 5, { width: maxWidth - 10 });
+          yPos += doc.heightOfString(text, { width: maxWidth - 10 }) + 20;
+        }
+        // Lists
+        else if (line.match(/<li>/i)) {
+          const text = line.replace(/<\/?li>/gi, '').replace(/<[^>]*>/g, '').trim();
+          if (text) {
+            doc.text(`• ${text}`, margin + 10, yPos, { width: maxWidth - 10 });
+            yPos += 18;
+          }
+        }
+        // Blockquotes
+        else if (line.match(/<blockquote>/i)) {
+          const text = line.replace(/<\/?blockquote>/gi, '').replace(/<[^>]*>/g, '');
+          doc.fillColor('#666').text(`"${text}"`, margin + 10, yPos, { width: maxWidth - 10 });
+          yPos += 20;
+          doc.fillColor('#333');
+        }
+        // Paragraphs
+        else if (line.match(/<p>/i)) {
+          const text = line.replace(/<\/?p>/gi, '').replace(/<[^>]*>/g, '').trim();
+          if (text && !text.match(/^[<\s]*$/)) {
+            const height = doc.heightOfString(text, { width: maxWidth });
+            doc.text(text, margin, yPos, { width: maxWidth });
+            yPos += height + 10;
+          }
+        }
+        // Horizontal rule
+        else if (line.match(/<hr>/i)) {
+          doc.strokeColor('#eee').lineWidth(2).moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
+          yPos += 30;
+        }
+        // Plain text
+        else if (line.trim()) {
+          const text = line.replace(/<[^>]*>/g, '').trim();
+          if (text && !text.match(/^[<\s]*$/)) {
+            const height = doc.heightOfString(text, { width: maxWidth });
+            doc.text(text, margin, yPos, { width: maxWidth });
+            yPos += height + 10;
+          }
+        }
+      }
+
+      doc.end();
+    } catch (error) {
+      reject(error);
     }
   });
-
-  await browser.close();
-  return pdf;
 }
 
 // Route: Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Markdown to PDF service is running' });
+  res.json({ status: 'ok', message: 'Markdown to PDF service is running (PDFKit version)' });
 });
 
 // Route: Convert file upload
@@ -175,5 +206,6 @@ app.listen(PORT, () => {
   console.log(`\n🚀 Markdown to PDF server running on http://localhost:${PORT}`);
   console.log(`📄 Upload file: POST /convert/file`);
   console.log(`✍️  Convert text: POST /convert/text`);
-  console.log(`💚 Health check: GET /health\n`);
+  console.log(`💚 Health check: GET /health`);
+  console.log(`📦 Using: PDFKit (no browser required)\n`);
 });
